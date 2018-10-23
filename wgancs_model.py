@@ -357,7 +357,6 @@ def _discriminator_model(sess, features, disc_input, layer_output_skip=5, hybrid
     mapsize = 3
     layers  = [4, 8, 16, 32]#[8, 16, 32, 64]#[64, 128, 256, 512]
     old_vars = tf.global_variables()#tf.all_variables() , all_variables() are deprecated
-    output_layers = []
     
     # apply dropout to inputs to the disc
     if FLAGS.disc_dropp > 0.0: 
@@ -367,7 +366,7 @@ def _discriminator_model(sess, features, disc_input, layer_output_skip=5, hybrid
     if hybrid_disc>0:
         disc_size = tf.shape(disc_input)#disc_input.get_shape()
         #print("DISCINPUT",disc_size)        
-        disc_kspace = Fourier(disc_input, separate_complex=False)
+        disc_kspace = Fourier(disc_input, separate_complex=True)
         disc_kspace_real = tf.cast(tf.real(disc_kspace), tf.float32)
         #print(disc_kspace_real)
         disc_kspace_real = tf.reshape(disc_kspace_real, [disc_size[0],disc_size[1],disc_size[2],1])
@@ -377,9 +376,9 @@ def _discriminator_model(sess, features, disc_input, layer_output_skip=5, hybrid
         disc_kspace_mag = tf.cast(tf.abs(disc_kspace), tf.float32)
         #print(disc_kspace_mag)
         disc_kspace_mag = tf.log(disc_kspace_mag)
-        disc_kspace_mag = tf.reshape(disc_kspace_mag, [disc_size[0],disc_size[1],disc_size[2],1])
+        disc_kspace_mag = tf.reshape(disc_kspace_mag/tf.reduce_max(disc_kspace_mag), [disc_size[0],disc_size[1],disc_size[2],1])
         if hybrid_disc == 1:
-            disc_hybird = tf.concat(axis = 3, values = [disc_input * 2-1, disc_kspace_imag])
+            disc_hybird = tf.concat(axis = 3, values = [disc_input , disc_kspace_mag])
         else:
             disc_hybird = tf.concat(axis = 3, values = [disc_input * 2-1, disc_kspace_imag, disc_kspace_real, disc_kspace_imag])
     else:
@@ -403,34 +402,28 @@ def _discriminator_model(sess, features, disc_input, layer_output_skip=5, hybrid
     model.add_conv2d(nunits, mapsize=mapsize, stride=1, stddev_factor=stddev_factor)
     if not FLAGS.wgan_gp: 
         model.add_batch_norm()
-    #  output_layers.append(model.outputs[-1])
     if (FLAGS.activation=='lrelu'):
         model.add_lrelu()
     else:
         model.add_relu()
-    if FLAGS.FM:
-        E_layer1=tf.reduce_mean(model.outputs[-1],axis=(1,2))
-        output_layers.append(E_layer1)
 
     model.add_conv2d(nunits, mapsize=1, stride=1, stddev_factor=stddev_factor)
     if not FLAGS.wgan_gp: 
         model.add_batch_norm()
-    #  output_layers.append(model.outputs[-1])
     if (FLAGS.activation=='lrelu'):
         model.add_lrelu()
     else:
         model.add_relu()
-    if FLAGS.FM:
-        E_layer2=tf.reduce_mean(model.outputs[-1],axis=(1,2)) # (8, 32)
-        output_layers.append(E_layer2)
 
     # Linearly map to real/fake and return average score
     # (softmax will be applied later)
     model.add_conv2d(1, mapsize=1, stride=1, stddev_factor=stddev_factor)
     model.add_mean()
+    output_layers = [model.outputs[0]] + model.outputs[1:-1][::layer_output_skip] + [model.outputs[-1]]
 
     new_vars  = tf.global_variables()#tf.all_variables() , all_variables() are deprecated
     disc_vars = list(set(new_vars) - set(old_vars))
+    
 
     return model.get_output(), disc_vars, output_layers
 
@@ -701,7 +694,7 @@ def create_model(sess, features, labels, masks, architecture='resnet'):
 
     # Discriminator with real data
     disc_real_input = tf.identity(labels, name='disc_real_input')
-
+   
     # TBD: Is there a better way to instance the discriminator?
     with tf.variable_scope('disc',reuse=tf.AUTO_REUSE) as scope:
         #print('hybrid_disc', FLAGS.hybrid_disc)
@@ -827,7 +820,7 @@ def loss_DSSIS_tf11(y_true, y_pred, patch_size=5, batch_size=-1):
     ssim /= denom
     #print(ssim)
     # ssim = tf.select(tf.is_nan(ssim), K.zeros_like(ssim), ssim)
-    return tf.reduce_mean(((1.0 - ssim) / 2), name='ssim_loss')
+    return tf.reduce_mean(ssim, name='ssim') #tf.reduce_mean(((1.0 - ssim) / 2), name='ssim_loss')
 
 def create_generator_loss(disc_output, gene_output, features, labels, masks, X,Z):
     # I.e. did we fool the discriminator?
